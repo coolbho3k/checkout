@@ -1940,6 +1940,11 @@ function runWithTimeoutAndRetry() {
             lastError = (_a = result.error) !== null && _a !== void 0 ? _a : new Error('Unknown error');
             const reason = result.timedOut ? 'timeout' : 'failure';
             core.warning(`Checkout ${attemptLabel} ended with ${reason}: ${lastError.message}`);
+            // Ensure problem matcher is removed if the child exited unexpectedly
+            try {
+                coreCommand.issueCommand('remove-matcher', { owner: 'checkout-git' }, '');
+            }
+            catch (_d) { }
             // Clean up git state before a retry so the next attempt is from a clean slate
             try {
                 yield cleanupGitState();
@@ -1989,7 +1994,7 @@ function runChildOnce(timeoutSeconds) {
             clearTimers();
             resolve({ success: false, timedOut: false, error: err });
         });
-        child.on('exit', code => {
+        child.on('exit', (code, signal) => {
             clearTimers();
             if (code === 0) {
                 resolve({ success: true, timedOut: false });
@@ -1997,7 +2002,9 @@ function runChildOnce(timeoutSeconds) {
             else {
                 const msg = timedOut
                     ? `Timed out after ${timeoutSeconds}s`
-                    : `Exited with code ${code}`;
+                    : signal
+                        ? `Exited due to signal ${signal}`
+                        : `Exited with code ${code}`;
                 resolve({ success: false, timedOut, error: new Error(msg) });
             }
         });

@@ -70,6 +70,11 @@ async function runWithTimeoutAndRetry(): Promise<void> {
     const reason = result.timedOut ? 'timeout' : 'failure'
     core.warning(`Checkout ${attemptLabel} ended with ${reason}: ${lastError.message}`)
 
+    // Ensure problem matcher is removed if the child exited unexpectedly
+    try {
+      coreCommand.issueCommand('remove-matcher', {owner: 'checkout-git'}, '')
+    } catch {}
+
     // Clean up git state before a retry so the next attempt is from a clean slate
     try {
       await cleanupGitState()
@@ -126,14 +131,16 @@ function runChildOnce(
       resolve({success: false, timedOut: false, error: err as Error})
     })
 
-    child.on('exit', code => {
+    child.on('exit', (code, signal) => {
       clearTimers()
       if (code === 0) {
         resolve({success: true, timedOut: false})
       } else {
         const msg = timedOut
           ? `Timed out after ${timeoutSeconds}s`
-          : `Exited with code ${code}`
+          : signal
+            ? `Exited due to signal ${signal}`
+            : `Exited with code ${code}`
         resolve({success: false, timedOut, error: new Error(msg)})
       }
     })
