@@ -129,6 +129,15 @@ Please refer to the [release page](https://github.com/actions/checkout/releases/
     # Default: true
     show-progress: ''
 
+    # Overall timeout in seconds for the main action execution. 0 disables the
+    # timeout.
+    # Default: 0
+    timeout: ''
+
+    # Number of retries for the whole action if it fails. 0 disables retries.
+    # Default: 0
+    retry: ''
+
     # Whether to download Git-LFS files
     # Default: false
     lfs: ''

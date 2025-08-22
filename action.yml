@@ -80,6 +80,12 @@ inputs:
   show-progress:
     description: 'Whether to show progress status output when fetching.'
     default: true
+  timeout:
+    description: 'Overall timeout in seconds for the main action execution. 0 disables the timeout.'
+    default: 0
+  retry:
+    description: 'Number of retries for the whole action if it fails. 0 disables retries.'
+    default: 0
   lfs:
     description: 'Whether to download Git-LFS files'
     default: false

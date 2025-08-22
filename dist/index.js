@@ -1882,7 +1882,9 @@ const gitSourceProvider = __importStar(__nccwpck_require__(9210));
 const inputHelper = __importStar(__nccwpck_require__(5480));
 const path = __importStar(__nccwpck_require__(1017));
 const stateHelper = __importStar(__nccwpck_require__(4866));
-function run() {
+const child_process_1 = __nccwpck_require__(2081);
+const io = __importStar(__nccwpck_require__(7436));
+function performMain() {
     return __awaiter(this, void 0, void 0, function* () {
         var _a;
         try {
@@ -1904,6 +1906,119 @@ function run() {
         }
     });
 }
+function runWithTimeoutAndRetry() {
+    return __awaiter(this, void 0, void 0, function* () {
+        var _a, _b, _c;
+        // Parse high-level inputs here to keep them out of IGitSourceSettings
+        const timeoutInput = core.getInput('timeout') || '0';
+        const retryInput = core.getInput('retry') || '0';
+        let timeoutSeconds = Math.floor(Number(timeoutInput));
+        let retryCount = Math.floor(Number(retryInput));
+        if (!isFinite(timeoutSeconds) || timeoutSeconds < 0)
+            timeoutSeconds = 0;
+        if (!isFinite(retryCount) || retryCount < 0)
+            retryCount = 0;
+        // Child-mode executes the actual action logic so the parent can time out/kill and retry cleanly
+        if (process.env['CHECKOUT_CHILD'] === '1') {
+            yield performMain();
+            return;
+        }
+        // Fast path if no timeout and no retry
+        if (timeoutSeconds === 0 && retryCount === 0) {
+            yield performMain();
+            return;
+        }
+        const attempts = retryCount + 1;
+        let lastError = null;
+        for (let attempt = 1; attempt <= attempts; attempt++) {
+            const attemptLabel = `Attempt ${attempt}/${attempts}`;
+            core.info(`Starting checkout ${attemptLabel}`);
+            const result = yield runChildOnce(timeoutSeconds);
+            if (result.success) {
+                return;
+            }
+            lastError = (_a = result.error) !== null && _a !== void 0 ? _a : new Error('Unknown error');
+            const reason = result.timedOut ? 'timeout' : 'failure';
+            core.warning(`Checkout ${attemptLabel} ended with ${reason}: ${lastError.message}`);
+            // Clean up git state before a retry so the next attempt is from a clean slate
+            try {
+                yield cleanupGitState();
+            }
+            catch (e) {
+                core.warning(`Failed to cleanup git state: ${(_b = e === null || e === void 0 ? void 0 : e.message) !== null && _b !== void 0 ? _b : e}`);
+            }
+            if (attempt < attempts) {
+                core.info('Retrying...');
+            }
+        }
+        core.setFailed(`Checkout failed after ${attempts} attempt(s): ${(_c = lastError === null || lastError === void 0 ? void 0 : lastError.message) !== null && _c !== void 0 ? _c : 'unknown error'}`);
+    });
+}
+function runChildOnce(timeoutSeconds) {
+    return new Promise(resolve => {
+        const child = (0, child_process_1.spawn)(process.execPath, [process.argv[1]], {
+            env: Object.assign(Object.assign({}, process.env), { CHECKOUT_CHILD: '1' }),
+            stdio: 'inherit'
+        });
+        let timedOut = false;
+        let timeoutHandle;
+        let hardKillHandle;
+        const clearTimers = () => {
+            if (timeoutHandle)
+                clearTimeout(timeoutHandle);
+            if (hardKillHandle)
+                clearTimeout(hardKillHandle);
+        };
+        if (timeoutSeconds > 0) {
+            timeoutHandle = setTimeout(() => {
+                timedOut = true;
+                // Try graceful stop first
+                child.kill('SIGTERM');
+                // Ensure termination
+                hardKillHandle = setTimeout(() => {
+                    try {
+                        child.kill('SIGKILL');
+                    }
+                    catch (_a) {
+                        // ignore
+                    }
+                }, 5000);
+            }, timeoutSeconds * 1000);
+        }
+        child.on('error', err => {
+            clearTimers();
+            resolve({ success: false, timedOut: false, error: err });
+        });
+        child.on('exit', code => {
+            clearTimers();
+            if (code === 0) {
+                resolve({ success: true, timedOut: false });
+            }
+            else {
+                const msg = timedOut
+                    ? `Timed out after ${timeoutSeconds}s`
+                    : `Exited with code ${code}`;
+                resolve({ success: false, timedOut, error: new Error(msg) });
+            }
+        });
+    });
+}
+function cleanupGitState() {
+    return __awaiter(this, void 0, void 0, function* () {
+        // Determine repository path similar to input-helper, but without requiring token
+        const githubWorkspacePath = process.env['GITHUB_WORKSPACE'];
+        if (!githubWorkspacePath) {
+            return;
+        }
+        const repoRelativePath = core.getInput('path') || '.';
+        const repoPath = path.resolve(githubWorkspacePath, repoRelativePath);
+        const gitDir = path.join(repoPath, '.git');
+        core.startGroup('Cleaning up git state for retry');
+        yield io.rmRF(gitDir);
+        core.info(`Removed '${gitDir}' if it existed`);
+        core.endGroup();
+    });
+}
 function cleanup() {
     return __awaiter(this, void 0, void 0, function* () {
         var _a;
@@ -1917,7 +2032,7 @@ function cleanup() {
 }
 // Main
 if (!stateHelper.IsPost) {
-    run();
+    runWithTimeoutAndRetry();
 }
 // Post
 else {
